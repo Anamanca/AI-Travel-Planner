@@ -1,0 +1,11 @@
+langgraph
+langchain
+langchain-openai
+python-telegram-bot
+apify-client
+firecrawl-py
+tavily-python
+fpdf2
+python-dotenv
+pytest
+pytest-asyncio

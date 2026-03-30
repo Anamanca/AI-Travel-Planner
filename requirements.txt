@@ -1,6 +1,7 @@
 langgraph
 langchain
 langchain-openai
+crewai
 python-telegram-bot
 apify-client
 firecrawl-py

@@ -12,6 +12,9 @@ class AgentResult(TypedDict):
 
 class TravelState(TypedDict):
     """Trạng thái tổng thể của luồng LangGraph."""
+    # ID người dùng để gửi thông báo trực tiếp
+    chat_id: str
+    
     # Thông tin đầu vào từ người dùng
     user_info: Dict[str, str]
     
@@ -35,8 +38,8 @@ class TravelState(TypedDict):
     # Báo cáo cuối cùng dạng Markdown
     final_report: str
     
-    # Tên Agent đang xử lý hiện tại
-    current_agent: str
+    # Danh sách các Agent đang/vừa xử lý (Sử dụng Annotated với operator.add để cộng dồn list)
+    current_agent: Annotated[List[str], operator.add]
     
     # Lịch sử logs chi tiết (dùng cho debug và tài liệu)
     execution_logs: Annotated[List[Dict], operator.add]

@@ -137,12 +137,13 @@ async def confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         # Init LangGraph State
         info = context.user_data['user_info']
         state = {
+            "chat_id": str(update.effective_chat.id), # Truyền ID để gửi thông báo từ graph
             "user_info": info,
             "results": {},
             "evaluator_feedback": [],
             "retry_counts": {},
             "final_report": "",
-            "current_agent": "",
+            "current_agent": [], 
             "execution_logs": [],
             "user_feedback": "",
             "intent": ""
@@ -314,21 +315,34 @@ if __name__ == "__main__":
         .build()
     )
     
+    # Đăng ký bộ xử lý lỗi toàn cục cho ứng dụng
     application.add_error_handler(error_handler)
     
+    # Thiết lập ConversationHandler: Quản lý luồng hội thoại nhiều bước (Kịch bản Bot)
     conv_handler = ConversationHandler(
+        # Điểm bắt đầu cuộc trò chuyện: Khi người dùng gõ /start
         entry_points=[CommandHandler('start', start)],
+        
+        # Danh sách các trạng thái (bước) của cuộc hội thoại
         states={
+            # Bước 1: Thu thập thông tin - Lắng nghe tin nhắn văn bản từ người dùng
             COLLECTING: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_collection)],
+            
+            # Bước 2: Xác nhận - Xử lý khi người dùng bấm nút (Callback) hoặc nhắn tin để sửa
             CONFIRMING: [
                 CallbackQueryHandler(confirm_callback, pattern="^confirm_"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_edit)
             ],
+            
+            # Bước 3: Phản hồi - Xử lý các yêu cầu nghiên cứu thêm sau khi đã có báo cáo
             FEEDBACK: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_feedback)],
         },
+        
+        # Lối thoát: Khi người dùng muốn dừng lại bằng lệnh /cancel
         fallbacks=[CommandHandler('cancel', cancel)],
     )
 
+    # Thêm bộ quản lý hội thoại vào ứng dụng Bot
     application.add_handler(conv_handler)
     
     print("Bot đang chạy...")

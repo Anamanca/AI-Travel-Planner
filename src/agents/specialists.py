@@ -12,31 +12,38 @@ class TransportAgent(BaseAgent):
         self.tools = ResearchTools()
 
     def format_prompt(self, state: TravelState) -> str:
-        # Logic tạo prompt chuyên biệt cho vận chuyển
         return ""
 
     def run(self, state: TravelState) -> Dict[str, Any]:
         user_info = state['user_info']
-        query = f"Giá vé {self.mode} từ {user_info.get('from')} đến {user_info.get('destination')} ngày {user_info.get('date_start')}"
+        dest = user_info.get('destination')
+        origin = user_info.get('from')
+        date = user_info.get('date_start')
         
-        # Gọi tool tìm kiếm
+        query = f"Giá vé {self.mode} từ {origin} đến {dest} ngày {date}"
         search_data = self.tools.search_web(query)
         
         prompt = f"""
-        Dựa trên dữ liệu tìm kiếm: {search_data}
-        Hãy đưa ra 3 lựa chọn vé {self.mode} tốt nhất cho chuyến đi từ {user_info.get('from')} đến {user_info.get('destination')}.
-        Phân loại thành: 'Low' (Tiết kiệm), 'Mid' (Trung cấp), 'High' (Cao cấp/Thương gia).
+        Bạn là chuyên gia tìm kiếm vé {self.mode}. 
+        Nhiệm vụ: Tìm vé từ {origin} đến {dest} cho ngày {date}.
         
-        Trả về danh sách các đối tượng JSON theo định dạng:
+        Dữ liệu thô từ web: {search_data}
+        
+        YÊU CẦU BẮT BUỘC:
+        1. Phải trả về đúng lựa chọn cho 3 phân loại: 'Low' (Giá rẻ/Tiết kiệm), 'Mid' (Phổ thông/Trung cấp), 'High' (Thương gia/VIP). Mỗi phân loại có thể có nhiều lựa chọn
+        2. Mỗi lựa chọn phải có GIÁ CỤ THỂ (ước tính bằng số VNĐ), không được để bằng 0.
+        3. 'description' phải bao gồm: Tên hãng, giờ khởi hành (nếu có), và ưu điểm.
+        4. 'source' phải là tên trang web bạn tìm thấy thông tin.
+        
+        TRẢ VỀ DUY NHẤT ĐỊNH DẠNG JSON LIST:
         [
-            {{"category": "Low", "title": "...", "description": "...", "price": 0, "link": "...", "source": "Web"}},
-            ...
+            {{"category": "Low", "title": "Tên hãng/Chuyến đi", "description": "...", "price": 500000, "link": "url", "source": "tên nguồn"}},
+            {{"category": "Mid", "title": "...", "description": "...", "price": 1000000, "link": "url", "source": "tên nguồn"}},
+            {{"category": "High", "title": "...", "description": "...", "price": 2000000, "link": "url", "source": "tên nguồn"}}
         ]
         """
         response = self.llm.call(prompt)
-        # Parse kết quả và trả về đúng định dạng TravelState
         try:
-            # Tìm phần JSON trong response
             res_content = response.strip()
             if "```json" in res_content:
                 res_content = res_content.split("```json")[1].split("```")[0]
@@ -57,19 +64,32 @@ class DiscoveryAgent(BaseAgent):
 
     def run(self, state: TravelState) -> Dict[str, Any]:
         dest = state['user_info'].get('destination')
-        # Tìm trên TikTok & Facebook
+        # Tìm trên 3 nguồn khác nhau
         tiktok_data = self.tools.search_tiktok(f"{self.type} ngon nổi tiếng tại {dest}")
         fb_data = self.tools.search_facebook(f"Review {self.type} {dest}")
+        web_data = self.tools.search_web(f"Top các địa điểm {self.type} phải thử tại {dest}")
+        
+        type_label = "Quán ăn/Món ngon" if self.type == "food" else "Địa điểm tham quan/Cafe"
         
         prompt = f"""
-        Tổng hợp dữ liệu từ TikTok: {tiktok_data} và Facebook: {fb_data}.
-        Hãy liệt kê các {self.type} tại {dest}, xếp hạng từ cao đến thấp.
-        Phân loại thành: 'Low' (Bình dân), 'Mid' (Tầm trung), 'High' (Sang trọng).
+        Bạn là chuyên gia review du lịch. Nhiệm vụ: Tìm {type_label} tại {dest}.
         
-        Trả về JSON list:
+        Dữ liệu tổng hợp:
+        - TikTok: {tiktok_data}
+        - Facebook: {fb_data}
+        - Web (Google/Blogs): {web_data}
+        
+        YÊU CẦU BẮT BUỘC:
+        1. Phải trả về đúng lựa chọn cho 3 phân loại: 'Low' (Bình dân/Vỉa hè), 'Mid' (Tầm trung/Nhà hàng), 'High' (Sang trọng/Cao cấp). Mỗi phân loại có thể có nhiều lựa chọn
+        2. Với mỗi địa điểm, hãy ước tính 'price' (chi phí trung bình mỗi người bằng VNĐ). Không để bằng 0.
+        3. 'description' phải tóm tắt lý do tại sao nơi này nổi tiếng.
+        4. 'source' phải ghi rõ nguồn gốc thông tin (TikTok, Facebook, link web cụ thể).
+        
+        TRẢ VỀ DUY NHẤT ĐỊNH DẠNG JSON LIST:
         [
-            {{"category": "Mid", "title": "Tên địa điểm", "description": "Lý do nổi tiếng", "price": 0, "link": "link_social", "source": "TikTok/FB"}},
-            ...
+            {{"category": "Low", "title": "Tên nơi", "description": "...", "price": 50000, "link": "...", "source": "..."}},
+            {{"category": "Mid", "title": "...", "description": "...", "price": 300000, "link": "...", "source": "..."}},
+            {{"category": "High", "title": "...", "description": "...", "price": 1500000, "link": "...", "source": "..."}}
         ]
         """
         response = self.llm.call(prompt)
@@ -96,6 +116,6 @@ class WeatherAgent(BaseAgent):
         date = state['user_info'].get('date_start')
         weather_data = self.tools.search_web(f"Thời tiết tại {dest} ngày {date}")
         
-        prompt = f"Tóm tắt tình hình thời tiết tại {dest} dựa trên: {weather_data}. Trả về 1 đoạn văn ngắn kèm lời khuyên trang phục."
+        prompt = f"Tóm tắt tình hình thời tiết tại {dest} dựa trên: {weather_data}. Trả về 1 đoạn văn ngắn kèm lời khuyên trang phục, thuốc, vật dụng cần thiết."
         response = self.llm.call(prompt)
         return {"results": {"weather": [{"category": "Info", "title": "Thời tiết", "description": response, "price": 0, "source": "Web"}]}}

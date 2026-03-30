@@ -1,36 +1,28 @@
-# AI Travel Planner - GEMINI Context
+# AI Travel Planner - GEMINI Context (v1.1.0)
 
 ## Project Overview
-This project is an advanced AI-powered travel planning assistant delivered via a Telegram Bot. It uses a **Multi-Agent System (MAS)** architecture built on **LangGraph** and **crewai.LLM** to research, evaluate, and interactively refine travel itineraries.
+An advanced AI-powered travel planning assistant on Telegram, using a **Parallel Multi-Agent System (MAS)** built on **LangGraph**.
 
 ## Core Technologies
-- **Orchestration:** [LangGraph](https://github.com/langchain-ai/langgraph) for stateful, cyclic multi-agent workflows.
-- **LLM Engine:** Gemini 3 Flash via **9Router** local proxy (`http://localhost:20128/v1`) using `crewai.LLM`.
-- **Interface:** `python-telegram-bot` with `ConversationHandler` and `CallbackQueryHandler`.
-- **Search & Scraping:**
-    - **Tavily:** Deep web search for travel and weather.
-    - **Apify:** Social media research (TikTok, Facebook scrapers).
-- **Reporting:** `fpdf2` with Unicode support (`DejaVuSans.ttf`) for Vietnamese PDF export.
+- **Orchestration:** LangGraph (Async, Cyclic, Parallel).
+- **LLM:** Gemini 3 Flash via 9Router (`crewai.LLM`).
+- **Research:** Tavily (Web), Apify (Social Media).
+- **Reporting:** fpdf2 (UTF-8 support).
 
-## System Architecture & Agents
-- `src/main.py`: Entry point; handles NLP-based info collection, confirmation steps, and the interactive feedback loop.
-- `src/graph/workflow.py`: Defines the LangGraph state machine.
-- `src/agents/`:
-    - `InfoExtractorAgent`: Parses unstructured user input into travel details.
-    - `TransportAgent`: Researches transport options (Bus/Flight).
-    - `DiscoveryAgent`: Scrapes food and attraction recommendations from social media.
-    - `WeatherAgent`: Provides localized forecasts.
-    - `ReportingAgent`: Compiles data into structured Markdown/PDF reports.
-    - `IntentAgent`: Analyzes user feedback to re-trigger specific agents for deeper research.
+## Advanced Workflow & Agents
+- **Parallel Research Node:** Concurrent execution of `Transport`, `Food`, `Places`, and `Weather` agents using Fan-out.
+- **Self-Correction Logic:** `EvaluatorAgent` validates all research results. It triggers retries (max 2) if quality thresholds aren't met.
+- **Async Execution:** All Graph Nodes are `async def`, wrapping synchronous agent runs in `asyncio.to_thread`.
+- **Concurrent State Management:** `TravelState` uses `Annotated` with `operator.ior` and `operator.add` for safe parallel updates.
+- **Interaction Loop:** IntentAgent handles user feedback (e.g., "more cafes") to re-trigger specific nodes without re-running the whole graph.
 
-## Key Workflows
-1. **Flexible Info Collection:** User sends free-text messages -> `InfoExtractorAgent` fills `user_info` -> Bot asks only for missing fields.
-2. **Confirmation Loop:** Bot summarizes trip details -> User confirms via buttons or corrects info via chat.
-3. **Agentic Research:** Sequential execution of Transport, Food, Places, and Weather agents.
-4. **Interactive Feedback:** After report delivery, user can ask for more details (e.g., "find more cafes") -> `IntentAgent` routes back to the relevant agent node.
+## Key Files
+- `src/graph/workflow.py`: Parallel graph definition with retry logic.
+- `src/graph/state.py`: Concurrent state schema.
+- `src/agents/specialists.py`: Specialist agents with strict JSON prompts.
+- `src/main.py`: Telegram ConversationHandler and Async Graph invocation.
 
 ## Operational Notes
-- **Starting the Bot:** Run `python src/main.py`. The script automatically adds the project root to `sys.path`.
-- **Large Messages:** Uses `send_large_message` to chunk reports exceeding Telegram's 4096-character limit.
-- **Resets:** Use `/reset` or `/start` to clear session data and start a new planning cycle.
-- **9Router Config:** Ensure `NINE_ROUTER_API_BASE` and `NINE_ROUTER_API_KEY` are set in `.env`.
+- **Retries:** Graph sends real-time Telegram notifications during evaluation retries.
+- **Reporting:** Automatic PDF generation with Unicode support.
+- **Reset:** Use `/reset` or `/start` to clear session context.

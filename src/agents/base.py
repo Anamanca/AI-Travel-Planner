@@ -57,9 +57,12 @@ class EvaluatorAgent:
         Kết quả Agent: {agent_output}
         
         Hãy kiểm tra:
-        1. Kết quả có khớp với thời gian/địa điểm không?
+        1. Kết quả có khớp với thời gian/địa điểm không? 
         2. Có đủ 3 phân loại (Low, Mid, High) không?
         3. Thông tin có đầy đủ (giá, mô tả, nguồn) không?
+
+        ** Ngoại lệ**
+        - với kết quả trả về từ Agent weather, chỉ cần check tiêu chí 1 thôi, bỏ qua tiêu chí 2 và 3)
         
         Trả về kết quả theo định dạng JSON:
         {{

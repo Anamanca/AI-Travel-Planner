@@ -4,6 +4,9 @@ from src.agents.specialists import TransportAgent, DiscoveryAgent, WeatherAgent
 from src.agents.base import EvaluatorAgent, IntentAgent
 from src.agents.reporting import ReportingAgent
 import logging
+import os
+import asyncio
+from telegram import Bot
 
 logger = logging.getLogger(__name__)
 
@@ -11,50 +14,96 @@ def create_travel_graph():
     workflow = StateGraph(TravelState)
     evaluator = EvaluatorAgent()
     intent_agent = IntentAgent()
+    bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
 
-    # Định nghĩa các Node (Tác nhân)
-    def transport_node(state):
+    async def notify_user(chat_id, message):
+        """Gửi thông báo nhanh cho user qua Telegram."""
+        if bot_token and chat_id:
+            try:
+                bot = Bot(token=bot_token)
+                await bot.send_message(chat_id=chat_id, text=message, parse_mode='Markdown')
+            except Exception as e:
+                logger.error(f"Error sending notification: {e}")
+
+    # --- ĐỊNH NGHĨA CÁC NODE (Chuyển sang async def) ---
+    async def transport_node(state):
         logger.info("--- NODE: Transport ---")
         agent = TransportAgent(mode=state['user_info'].get('transport', 'bus'))
-        return agent.run(state)
+        # Chạy trong thread pool vì agent.run là sync
+        res = await asyncio.to_thread(agent.run, state)
+        return {**res, "current_agent": [agent.name]}
 
-    def food_node(state):
+    async def food_node(state):
         logger.info("--- NODE: Discovery (Food) ---")
         agent = DiscoveryAgent(type="food")
-        return agent.run(state)
+        res = await asyncio.to_thread(agent.run, state)
+        return {**res, "current_agent": [agent.name]}
 
-    def places_node(state):
+    async def places_node(state):
         logger.info("--- NODE: Discovery (Places) ---")
         agent = DiscoveryAgent(type="places")
-        return agent.run(state)
+        res = await asyncio.to_thread(agent.run, state)
+        return {**res, "current_agent": [agent.name]}
 
-    def weather_node(state):
+    async def weather_node(state):
         logger.info("--- NODE: Weather ---")
         agent = WeatherAgent()
-        return agent.run(state)
+        res = await asyncio.to_thread(agent.run, state)
+        return {**res, "current_agent": ["weather"]}
 
-    def evaluation_node(state):
+    async def evaluation_node(state):
         logger.info("--- NODE: Evaluation ---")
-        res = evaluator.evaluate(state, state.get('current_agent', ''))
-        return {"evaluator_feedback": [res], "is_valid": res['is_valid']}
+        agents_to_check = state.get('current_agent', [])
+        retry_counts = state.get('retry_counts', {})
+        chat_id = state.get('chat_id')
+        
+        if not agents_to_check:
+            return {"is_valid": True}
+            
+        all_valid = True
+        failed_agent = ""
+        
+        for agent_name in agents_to_check:
+            # evaluator.evaluate cũng là sync nên chạy trong thread
+            res = await asyncio.to_thread(evaluator.evaluate, state, agent_name)
+            if not res['is_valid']:
+                current_retry = retry_counts.get(agent_name, 0) + 1
+                
+                if current_retry <= 2:
+                    agent_label = agent_name.replace("discovery_", "").replace("transport_", "")
+                    # Thông báo tối đa 2 lần thử
+                    await notify_user(chat_id, f"🔍 AI đang kiểm tra lại thông tin về **{agent_label}** (Lần {current_retry}/2)...")
+                
+                return {
+                    "is_valid": False, 
+                    "current_agent": [], 
+                    "last_failed_agent": agent_name,
+                    "retry_counts": {agent_name: current_retry}
+                }
+        
+        return {
+            "is_valid": True, 
+            "current_agent": [], 
+            "last_failed_agent": ""
+        }
 
-    def reporting_node(state):
+    async def reporting_node(state):
         logger.info("--- NODE: Reporting ---")
         agent = ReportingAgent()
-        return agent.run(state)
+        res = await asyncio.to_thread(agent.run, state)
+        return res
 
-    def router_node(state):
-        logger.info(f"--- NODE: Router (User Feedback: {state.get('user_feedback')}) ---")
-        # Phân tích ý định từ feedback của người dùng
+    async def router_node(state):
+        logger.info(f"--- NODE: Router (Feedback: {state.get('user_feedback')}) ---")
         feedback = state.get("user_feedback", "")
         if not feedback:
             return {"intent": "finish"}
         
-        intent = intent_agent.analyze(feedback)
+        intent = await asyncio.to_thread(intent_agent.analyze, feedback)
         logger.info(f"Analyzed Intent: {intent}")
         return {"intent": intent}
 
-    # Thêm Node vào Graph
+    # --- THÊM NODE VÀO GRAPH ---
     workflow.add_node("transport", transport_node)
     workflow.add_node("food", food_node)
     workflow.add_node("places", places_node)
@@ -63,20 +112,45 @@ def create_travel_graph():
     workflow.add_node("reporting", reporting_node)
     workflow.add_node("router", router_node)
 
-    # Định nghĩa các Edge (Luồng đi)
+    # --- THIẾT LẬP LUỒNG ĐI (EDGES) ---
     workflow.set_entry_point("transport")
-    
-    # Luồng tuần tự ban đầu
     workflow.add_edge("transport", "food")
-    workflow.add_edge("food", "places")
-    workflow.add_edge("places", "weather")
-    workflow.add_edge("weather", "reporting")
-    
-    # Sau khi Reporting, Graph sẽ dừng lại để đợi feedback từ main.py
-    # Ở phiên bản này, ta sẽ kết thúc Graph và main.py sẽ re-invoke khi có tin nhắn mới
-    workflow.add_edge("reporting", END)
+    workflow.add_edge("transport", "places")
+    workflow.add_edge("transport", "weather")
+    workflow.add_edge("food", "evaluator")
+    workflow.add_edge("places", "evaluator")
+    workflow.add_edge("weather", "evaluator")
 
-    # Các node phục vụ cho Interactive Mode (khi được gọi trực tiếp từ router)
-    workflow.add_edge("router", END) # RouterNode sẽ được sử dụng để quyết định node tiếp theo trong main.py
+    def should_continue(state):
+        if state.get("is_valid"):
+            return "reporting"
+        else:
+            failed = state.get("last_failed_agent", "")
+            retry_counts = state.get("retry_counts", {})
+            # GIỚI HẠN 2 LẦN RETRY
+            if retry_counts.get(failed, 0) >= 2:
+                logger.warning(f"Max retries reached for {failed}. Moving to reporting.")
+                return "reporting"
+                
+            if "transport" in failed: return "transport"
+            if "food" in failed: return "food"
+            if "places" in failed: return "places"
+            if "weather" in failed: return "weather"
+            return "reporting"
+
+    workflow.add_conditional_edges(
+        "evaluator",
+        should_continue,
+        {
+            "reporting": "reporting",
+            "transport": "transport",
+            "food": "food",
+            "places": "places",
+            "weather": "weather"
+        }
+    )
+
+    workflow.add_edge("reporting", END)
+    workflow.add_edge("router", END) 
 
     return workflow.compile()

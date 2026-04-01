@@ -9,7 +9,9 @@
 - **Parallel Research Architecture:** Utilizes Fan-out/Fan-in patterns to gather data from multiple sources concurrently, significantly reducing response time.
 - **Self-Correction (Agentic Loop):** An independent `Evaluator Agent` validates research quality. If data is incomplete or inaccurate, it triggers automated retries (up to 2 times).
 - **Multi-Source Intelligence:** Integrates deep web search (**Tavily**) with social media scraping (**Apify** for TikTok & Facebook) to capture both official information and real-world community trends.
+- **Resilient Messaging:** Smart message delivery with automatic **Markdown fallback**. If complex LLM formatting fails Telegram's parser, the bot seamlessly switches to plain text to ensure delivery.
 - **Professional Reporting:** Automatically generates structured Markdown reports and exports high-quality PDFs with full Unicode (Vietnamese) support.
+- **Seamless Re-planning:** Automatic session reset and welcome message re-triggering after finishing a plan, allowing users to start new trips instantly.
 - **Interactive Feedback Loop:** Maintain a flexible conversation flow where users can refine specific parts of the plan (e.g., "find more cafes") without re-running the entire process.
 
 ---
@@ -64,7 +66,8 @@ For a detailed technical breakdown, see: [SYSTEM_ARCH.md](./SYSTEM_ARCH.md)
 
 ## 📜 Version History
 
-- **v1.1.0 (Current):** Implemented parallel MAS architecture, Evaluator retry logic, and real-time research notifications.
+- **v1.1.1 (Current):** Improved extraction field consistency, multi-intent routing, and resilient Telegram delivery.
+- **v1.1.0:** Implemented parallel MAS architecture, Evaluator retry logic, and real-time research notifications.
 - **v1.0.0:** Initial release with sequential MAS workflow.
 
 Full changelog available in: [history.md](./history.md)

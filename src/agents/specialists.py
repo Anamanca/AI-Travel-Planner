@@ -30,16 +30,16 @@ class TransportAgent(BaseAgent):
         Dữ liệu thô từ web: {search_data}
         
         YÊU CẦU BẮT BUỘC:
-        1. Phải trả về đúng lựa chọn cho 3 phân loại: 'Low' (Giá rẻ/Tiết kiệm), 'Mid' (Phổ thông/Trung cấp), 'High' (Thương gia/VIP). Mỗi phân loại có thể có nhiều lựa chọn
+        1. Liệt kế các kết quả tìm kiếm được, sắp xếp giá vé tăng dần
         2. Mỗi lựa chọn phải có GIÁ CỤ THỂ (ước tính bằng số VNĐ), không được để bằng 0.
         3. 'description' phải bao gồm: Tên hãng, giờ khởi hành (nếu có), và ưu điểm.
         4. 'source' phải là tên trang web bạn tìm thấy thông tin.
         
         TRẢ VỀ DUY NHẤT ĐỊNH DẠNG JSON LIST:
         [
-            {{"category": "Low", "title": "Tên hãng/Chuyến đi", "description": "...", "price": 500000, "link": "url", "source": "tên nguồn"}},
-            {{"category": "Mid", "title": "...", "description": "...", "price": 1000000, "link": "url", "source": "tên nguồn"}},
-            {{"category": "High", "title": "...", "description": "...", "price": 2000000, "link": "url", "source": "tên nguồn"}}
+            {{ "title": "Tên hãng/Chuyến đi", "description": "...", "price": 500000, "link": "url", "source": "tên nguồn"}},
+            {{"title": "...", "description": "...", "price": 1000000, "link": "url", "source": "tên nguồn"}},
+            {{"title": "...", "description": "...", "price": 2000000, "link": "url", "source": "tên nguồn"}}
         ]
         """
         response = self.llm.call(prompt)
@@ -80,16 +80,16 @@ class DiscoveryAgent(BaseAgent):
         - Web (Google/Blogs): {web_data}
         
         YÊU CẦU BẮT BUỘC:
-        1. Phải trả về đúng lựa chọn cho 3 phân loại: 'Low' (Bình dân/Vỉa hè), 'Mid' (Tầm trung/Nhà hàng), 'High' (Sang trọng/Cao cấp). Mỗi phân loại có thể có nhiều lựa chọn
+        1. Liệt kế các kết quả tìm kiếm được, sắp xếp theo mức độ nổi tiếng (độ phổ biến trên mạng xã hội, đánh giá cao).
         2. Với mỗi địa điểm, hãy ước tính 'price' (chi phí trung bình mỗi người bằng VNĐ). Không để bằng 0.
         3. 'description' phải tóm tắt lý do tại sao nơi này nổi tiếng.
         4. 'source' phải ghi rõ nguồn gốc thông tin (TikTok, Facebook, link web cụ thể).
         
         TRẢ VỀ DUY NHẤT ĐỊNH DẠNG JSON LIST:
         [
-            {{"category": "Low", "title": "Tên nơi", "description": "...", "price": 50000, "link": "...", "source": "..."}},
-            {{"category": "Mid", "title": "...", "description": "...", "price": 300000, "link": "...", "source": "..."}},
-            {{"category": "High", "title": "...", "description": "...", "price": 1500000, "link": "...", "source": "..."}}
+            {{"title": "Tên nơi", "description": "...", "price": 50000, "link": "...", "source": "..."}},
+            {{"title": "...", "description": "...", "price": 300000, "link": "...", "source": "..."}},
+            {{"title": "...", "description": "...", "price": 1500000, "link": "...", "source": "..."}}
         ]
         """
         response = self.llm.call(prompt)

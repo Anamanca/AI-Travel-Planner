@@ -104,7 +104,7 @@ class InfoExtractorAgent(BaseAgent):
         - 'destination': Điểm đến
         - 'date_start': Ngày đi (định dạng DD/MM/YYYY)
         - 'date_end': Ngày về (định dạng DD/MM/YYYY)
-        - 'people': Số lượng người
+        - 'people_among': Số lượng người
         - 'purpose': Mục đích (nghỉ dưỡng, khám phá, công tác...)
         - 'transport': Phương tiện (máy bay, xe khách...)
 
@@ -113,7 +113,7 @@ class InfoExtractorAgent(BaseAgent):
         Giữ nguyên các thông tin cũ nếu tin nhắn mới không thay đổi chúng.
         
         Ví dụ kết quả:
-        {{"from": "Hà Nội", "destination": "Đà Lạt", "date_start": "01/05/2026", "date_end": "05/05/2026", "people": "2 người", "purpose": "nghỉ dưỡng", "transport": "máy bay"}}
+        {{"from": "Hà Nội", "destination": "Đà Lạt", "date_start": "01/05/2026", "date_end": "05/05/2026", "people_among": "2 người", "purpose": "nghỉ dưỡng", "transport": "máy bay"}}
         """
         response = self.llm.call(prompt)
         import json
@@ -130,30 +130,34 @@ class IntentAgent(BaseAgent):
     def __init__(self, model: str = "openai/gc/gemini-3-flash-preview"):
         super().__init__(name="intent_router", model=model)
 
-    def analyze(self, user_feedback: str) -> str:
-        """Phân tích feedback và trả về key của Agent tương ứng."""
+    def analyze(self, user_feedback: str) -> List[str]:
+        """Phân tích feedback và trả về danh sách các key của Agent tương ứng."""
         if not user_feedback:
-            return "finish"
+            return ["finish"]
 
         prompt = f"""
         Phân tích tin nhắn của người dùng sau đây và xác định họ muốn làm gì tiếp theo:
         Tin nhắn: "{user_feedback}"
 
-        Hãy chọn MỘT trong các nhãn sau:
+        Hãy chọn các label sau:
         - 'transport': Nếu user muốn đổi phương tiện, hỏi vé máy bay/xe khách, giá vé...
         - 'food': Nếu user muốn tìm thêm quán ăn, món ngon, địa điểm ăn uống...
         - 'places': Nếu user muốn tìm thêm địa điểm tham quan, vui chơi, cafe...
         - 'weather': Nếu user muốn hỏi thêm về thời tiết.
         - 'finish': Nếu user nói 'xong rồi', 'cảm ơn', 'hết rồi' hoặc không muốn làm gì thêm.
-        - 'other': Nếu là câu hỏi chung chung hoặc không rõ ràng nhưng vẫn muốn research thêm.
+       
+        Nếu là câu hỏi chung chung hoặc không rõ ràng, trả về 'other'.
 
-        CHỈ TRẢ VỀ DUY NHẤT TỪ KHÓA NHÃN (Ví dụ: food).
+        CHỈ TRẢ VỀ label hoặc danh sách label (Ví dụ: transport, food). 
+        Không giải thích gì thêm.
         """
         response = self.llm.call(prompt).strip().lower()
         
         # Cleanup response
-        valid_intents = ['transport', 'food', 'places', 'weather', 'finish', 'other']
-        for intent in valid_intents:
-            if intent in response:
-                return intent
-        return "other"
+        valid_intents = ['transport', 'food', 'places', 'weather', 'finish']
+        found_intents = [intent for intent in valid_intents if intent in response]
+        
+        if not found_intents:
+            return ["other"]
+            
+        return found_intents

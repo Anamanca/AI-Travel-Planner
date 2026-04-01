@@ -22,7 +22,7 @@ class TravelState(TypedDict):
     user_feedback: str
     
     # Ý định của user (được RouterNode phân tích: 'food', 'transport', 'weather', 'finish', 'other')
-    intent: str
+    intent: List[str]
     
     # Kết quả tích lũy từ các Agent (Dùng Annotated với operator.ior để merge dict)
     # Key sẽ là tên agent (ví dụ: 'bus', 'flight', 'food')

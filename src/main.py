@@ -1,24 +1,22 @@
 import os
 import sys
 import logging
+import asyncio
 
-# Thêm thư mục gốc của project vào sys.path để có thể import từ src
+# Thêm thư mục gốc của project vào sys.path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
-    CallbackQueryHandler,
     filters,
     ContextTypes,
-    ConversationHandler,
 )
 from dotenv import load_dotenv
 from src.graph.workflow import create_travel_graph
 from src.agents.reporting import PDFExporter, save_execution_log
-from src.agents.base import InfoExtractorAgent, IntentAgent
 
 # Load environment variables
 load_dotenv()
@@ -29,116 +27,76 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# State definitions for ConversationHandler
-COLLECTING, CONFIRMING, FEEDBACK = range(3)
+# --- CÁC HÀM TRỢ GIÚP ---
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Bắt đầu cuộc hội thoại và hướng dẫn user cung cấp thông tin."""
-    # Reset toàn bộ dữ liệu cũ
-    context.user_data.clear()
+async def send_large_message(update: Update, text: str):
+    """Chia nhỏ tin nhắn lớn để gửi tránh lỗi giới hạn 4096 ký tự của Telegram. Có fallback nếu lỗi Markdown."""
+    parts = []
+    if len(text) <= 4000:
+        parts = [text]
+    else:
+        temp_text = text
+        while len(temp_text) > 0:
+            if len(temp_text) <= 4000:
+                parts.append(temp_text)
+                break
+            chunk = temp_text[:4000]
+            last_newline = chunk.rfind('\n')
+            if last_newline != -1 and last_newline > 3000:
+                parts.append(temp_text[:last_newline])
+                temp_text = temp_text[last_newline:].lstrip()
+            else:
+                parts.append(temp_text[:4000])
+                temp_text = temp_text[4000:]
+
+    for part in parts:
+        try:
+            await update.effective_message.reply_text(part, parse_mode='Markdown')
+        except Exception as e:
+            logger.warning(f"Markdown parsing failed, sending as plain text: {e}")
+            await update.effective_message.reply_text(part)
+
+# --- CÁC BỘ XỬ LÝ CHÍNH ---
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Khởi tạo phiên làm việc mới và gửi lời chào."""
+    chat_id = str(update.effective_chat.id)
     
-    context.user_data['user_info'] = {
-        "from": "", "destination": "", "date_start": "", 
-        "date_end": "", "people": "", "purpose": "", "transport": ""
+    # Khởi tạo TravelState trống
+    state = {
+        "chat_id": chat_id,
+        "user_info": {},
+        "results": {},
+        "evaluator_feedback": [],
+        "retry_counts": {},
+        "final_report": "",
+        "current_agent": [], 
+        "execution_logs": [],
+        "user_feedback": "",
+        "intent": []
     }
+    context.user_data['graph_state'] = state
     
     welcome_msg = (
         "Chào mừng bạn đến với **AI Travel Planner**! 🌍✈️\n\n"
-        "Tôi đã sẵn sàng cho một kế hoạch mới. Hãy cung cấp các thông tin sau:\n"
-        "📍 **Điểm đi & Điểm đến**\n"
-        "📅 **Ngày đi & Ngày về**\n"
-        "👥 **Số lượng người**\n"
-        "🎯 **Mục đích**\n"
-        "🚌 **Phương tiện**\n\n"
-        "--- \n"
-        "💡 **Ví dụ:** *'Tôi muốn đi Đà Lạt từ Hà Nội từ 01/05 đến 05/05, có 2 người đi nghỉ dưỡng bằng máy bay'*."
+        "Tôi đã sẵn sàng lên kế hoạch du lịch cho bạn. Hãy cho tôi biết:\n"
+        "📍 Bạn muốn đi đâu, từ đâu?\n"
+        "📅 Đi vào thời gian nào?\n"
+        "👥 Có bao nhiêu người tham gia?\n\n"
+        "💡 **Ví dụ:** *'Tôi muốn đi Đà Lạt từ Hà Nội từ 01/05 đến 05/05, 2 người'*."
     )
-    
     await update.effective_message.reply_text(welcome_msg, parse_mode='Markdown')
-    return COLLECTING
 
-async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Lệnh /reset để xóa dữ liệu và bắt đầu lại."""
-    await update.message.reply_text("♻️ Đã xóa toàn bộ dữ liệu cũ. Chúng ta bắt đầu lại nhé!")
-    return await start(update, context)
-
-async def handle_collection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Xử lý mọi tin nhắn văn bản từ user thông qua LangGraph."""
     user_text = update.message.text
-    logger.info(f"Collecting info from text: {user_text}")
+    chat_id = str(update.effective_chat.id)
     
-    extractor = InfoExtractorAgent()
-    current_info = context.user_data.get('user_info', {})
-    
-    # Bóc tách thông tin
-    updated_info = extractor.extract(user_text, current_info)
-    context.user_data['user_info'] = updated_info
-    
-    # Kiểm tra xem còn thiếu gì không
-    missing_fields = []
-    field_labels = {
-        "from": "Điểm xuất phát",
-        "destination": "Điểm đến",
-        "date_start": "Ngày đi",
-        "date_end": "Ngày về",
-        "people": "Số người",
-        "purpose": "Mục đích",
-        "transport": "Phương tiện"
-    }
-    
-    for field, label in field_labels.items():
-        if not updated_info.get(field):
-            missing_fields.append(label)
-            
-    if missing_fields:
-        missing_str = ", ".join(missing_fields)
-        await update.message.reply_text(
-            f"Cảm ơn bạn! Tôi đã ghi nhận thông tin. Tuy nhiên, tôi vẫn còn thiếu: **{missing_str}**.\n\n"
-            "Hãy cung cấp thêm các thông tin còn thiếu nhé!"
-        )
-        return COLLECTING
-    
-    # Nếu đã đủ thông tin -> Chuyển sang Confirm
-    return await show_confirmation(update, context)
-
-async def show_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    info = context.user_data['user_info']
-    summary = (
-        "📍 **XÁC NHẬN THÔNG TIN CHUYẾN ĐI**\n\n"
-        f"1. Đi từ: {info['from']}\n"
-        f"2. Điểm đến: {info['destination']}\n"
-        f"3. Thời gian: {info['date_start']} - {info['date_end']}\n"
-        f"4. Số người: {info['people']}\n"
-        f"5. Mục đích: {info['purpose']}\n"
-        f"6. Phương tiện: {info['transport']}\n\n"
-        "Thông tin này đã chính xác chưa? Bạn có thể nhấn nút bên dưới để bắt đầu hoặc nhắn tin để sửa lại."
-    )
-    
-    keyboard = [
-        [InlineKeyboardButton("✅ Chính xác, bắt đầu ngay!", callback_data="confirm_ok")],
-        [InlineKeyboardButton("✏️ Tôi muốn sửa lại", callback_data="confirm_edit")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    if update.callback_query:
-        await update.callback_query.message.reply_text(summary, reply_markup=reply_markup, parse_mode='Markdown')
-    else:
-        await update.message.reply_text(summary, reply_markup=reply_markup, parse_mode='Markdown')
-        
-    return CONFIRMING
-
-async def confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer()
-    
-    if query.data == "confirm_ok":
-        await query.message.edit_reply_markup(reply_markup=None)
-        await query.message.reply_text("Tuyệt vời! Đội ngũ AI Agents đang bắt đầu làm việc. Vui lòng đợi trong giây lát... 🚀")
-        
-        # Init LangGraph State
-        info = context.user_data['user_info']
-        state = {
-            "chat_id": str(update.effective_chat.id), # Truyền ID để gửi thông báo từ graph
-            "user_info": info,
+    # 1. Khởi tạo state nếu chưa tồn tại (Dành cho trường hợp user nhắn tin trước khi gõ /start)
+    if 'graph_state' not in context.user_data:
+        context.user_data['graph_state'] = {
+            "chat_id": chat_id,
+            "user_info": {},
             "results": {},
             "evaluator_feedback": [],
             "retry_counts": {},
@@ -146,157 +104,71 @@ async def confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             "current_agent": [], 
             "execution_logs": [],
             "user_feedback": "",
-            "intent": ""
+            "intent": []
         }
-        context.user_data['graph_state'] = state
-        return await run_and_report(update, context)
     
-    elif query.data == "confirm_edit":
-        await query.message.reply_text("Vâng, bạn hãy nhắn lại những thông tin cần thay đổi nhé!")
-        return COLLECTING
-
-async def handle_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    # Tái sử dụng handle_collection để cập nhật thông tin
-    return await handle_collection(update, context)
-
-# ... (Giữ nguyên run_and_report, handle_feedback, start, etc.)
-
-async def send_large_message(update: Update, text: str):
-    """Chia nhỏ tin nhắn lớn để gửi tránh lỗi giới hạn 4096 ký tự của Telegram."""
-    if len(text) <= 4000:
-        await update.effective_message.reply_text(text)
-        return
-
-    # Chia nhỏ theo đoạn văn để tránh cắt giữa chừng câu
-    parts = []
-    while len(text) > 0:
-        if len(text) <= 4000:
-            parts.append(text)
-            break
-        
-        # Tìm vị trí ngắt dòng gần nhất trong phạm vi 4000 ký tự
-        chunk = text[:4000]
-        last_newline = chunk.rfind('\n')
-        
-        if last_newline != -1 and last_newline > 3000:
-            parts.append(text[:last_newline])
-            text = text[last_newline:].lstrip()
-        else:
-            parts.append(text[:4000])
-            text = text[4000:]
-
-    for part in parts:
-        await update.effective_message.reply_text(part)
-
-async def run_and_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     state = context.user_data['graph_state']
-    chat_id = update.effective_chat.id
-    
-    try:
-        graph = create_travel_graph()
-        # Chạy toàn bộ graph (hoặc từ điểm cụ thể)
-        final_state = await graph.ainvoke(state)
-        
-        # Cập nhật state vào user_data để dùng cho lần kế tiếp
-        context.user_data['graph_state'] = final_state
-        
-        # Gửi báo cáo Markdown (Sử dụng hàm chia nhỏ tin nhắn)
-        report = final_state.get('final_report', 'Không có báo cáo.')
-        await update.effective_message.reply_text("✅ **Kế hoạch của bạn đã hoàn thành!**", parse_mode='Markdown')
-        await send_large_message(update, report)
-        
-        # Xuất PDF
-        pdf_path = f"output/plan_{chat_id}.pdf"
-        PDFExporter.export(report, pdf_path)
-        
-        # Gửi file PDF
-        with open(pdf_path, 'rb') as f:
-            await context.bot.send_document(chat_id=chat_id, document=f, filename="KeHoachDuLich.pdf")
-            
-        # Lưu Log
-        save_execution_log(final_state)
-        
-        await update.effective_message.reply_text(
-            "Bạn có muốn tôi sửa đổi hay giúp research thêm gì nữa không? 🔍\n"
-            "Ví dụ: 'Tìm thêm quán cafe', 'Đổi sang đi máy bay'...\n"
-            "Nếu đã hài lòng, hãy nhắn 'Kết thúc' hoặc 'Xong'."
-        )
-        return FEEDBACK
-        
-    except Exception as e:
-        logger.error(f"Error running graph: {e}")
-        await update.effective_message.reply_text(f"Có lỗi xảy ra trong quá trình xử lý: {str(e)}")
-        return ConversationHandler.END
-
-async def handle_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    user_text = update.message.text
-    logger.info(f"User Feedback received: {user_text}")
-    
-    state = context.user_data.get('graph_state')
-    if not state:
-        await update.message.reply_text("Xin lỗi, phiên làm việc đã hết hạn. Vui lòng dùng /start để bắt đầu lại.")
-        return ConversationHandler.END
-
-    # Cập nhật feedback vào state
+    # Cập nhật tin nhắn mới nhất của user vào state để LangGraph bóc tách
     state['user_feedback'] = user_text
     
+    await update.message.reply_text("🔄 AI đang xử lý yêu cầu của bạn... 🚀")
+    
     try:
-        # Bước 1: Chạy RouterNode để xác định ý định
         graph = create_travel_graph()
-        # Chỉ chạy node router
-        router_state = await graph.ainvoke(state, {"configurable": {"thread_id": "1"}, "interrupt_after": ["router"]})
-        # Note: Do cấu hình graph đơn giản, ta sẽ dùng LLM trực tiếp hoặc invoke router node
-        # Để đơn giản và chính xác nhất, ta invoke graph với feedback và để nó tự routing
-        # Nhưng vì graph hiện tại kết thúc ở reporting, ta sẽ dùng logic routing ở đây
+        # Chạy toàn bộ logic trong Graph: Extract -> Intent -> Research (nếu đủ) -> Report
+        final_state = await graph.ainvoke(state)
         
-        from src.agents.base import IntentAgent
-        intent_agent = IntentAgent()
-        intent = intent_agent.analyze(user_text)
-        logger.info(f"Detected Intent in main: {intent}")
+        # Lưu lại state sau khi Graph đã cập nhật (user_info, results, final_report...)
+        context.user_data['graph_state'] = final_state
         
-        if intent == "finish":
-            await update.message.reply_text("Chúc bạn có một chuyến đi tuyệt vời! 🌟 Hẹn gặp lại.")
-            return await start(update, context) # Reset và bắt đầu lại
+        # 2. Kiểm tra nếu user muốn kết thúc (IntentAgent nhận diện được từ user_feedback)
+        intents = final_state.get('intent', [])
+        if "finish" in (intents if isinstance(intents, list) else [intents]):
+            await update.effective_message.reply_text("Chúc bạn có một chuyến đi tuyệt vời! 🌟 Hẹn gặp lại.")
+            
+            # Xóa state cũ để sẵn sàng cho plan mới
+            context.user_data.clear()
+            
+            # Gửi lại lời chào để bắt đầu plan mới
+            welcome_msg = (
+                "Tôi đã sẵn sàng lên kế hoạch mới cho bạn. Hãy cho tôi biết:\n"
+                "📍 Bạn muốn đi đâu, từ đâu?\n"
+                "📅 Đi vào thời gian nào?\n"
+                "👥 Có bao nhiêu người tham gia?\n\n"
+                "💡 **Ví dụ:** *'Tôi muốn đi Đà Lạt từ Hà Nội từ 01/05 đến 05/05, 2 người'*."
+            )
+            await update.effective_message.reply_text(welcome_msg, parse_mode='Markdown')
+            return
 
-        # Nếu user muốn research thêm
-        await update.message.reply_text(f"Đang thực hiện research thêm về '{intent}'... 🚀")
+        # 3. Gửi báo cáo (có thể là báo cáo du lịch hoặc thông báo yêu cầu thêm thông tin)
+        report = final_state.get('final_report', 'Xin lỗi, tôi gặp chút trục trặc khi xử lý thông tin.')
+        await send_large_message(update, report)
         
-        # Cấu hình node mục tiêu dựa trên intent
-        node_map = {
-            "transport": "transport",
-            "food": "food",
-            "places": "places",
-            "weather": "weather",
-            "other": "food" # Mặc định nếu không rõ
-        }
-        target_node = node_map.get(intent, "food")
-        
-        # Chạy lại graph từ node được yêu cầu
-        # Trong LangGraph thực tế, ta dùng `update_state` và resume, 
-        # nhưng ở đây ta sẽ invoke lại từ node đó bằng cách điều chỉnh workflow nếu cần
-        # Cách đơn giản nhất: Chạy lại node đó và chạy tiếp tới reporting
-        final_state = await graph.ainvoke(state, {"configurable": {"thread_id": "1"}})
-        
-        # Để thực sự research THÊM mà không mất cái cũ, kết quả đã được merge nhờ operator.ior trong TravelState
-        # Ta chỉ cần chạy lại graph
-        return await run_and_report(update, context)
-
+        # 4. Nếu đã có kết quả nghiên cứu (nghĩa là không phải đang hỏi thiếu thông tin), xuất PDF
+        if final_state.get('results'):
+            # Chỉ tạo PDF khi thực sự có dữ liệu du lịch
+            pdf_path = f"output/plan_{chat_id}.pdf"
+            os.makedirs("output", exist_ok=True)
+            from src.agents.reporting import PDFExporter
+            PDFExporter.export(report, pdf_path)
+            
+            with open(pdf_path, 'rb') as f:
+                await context.bot.send_document(chat_id=chat_id, document=f, filename="KeHoachDuLich.pdf")
+            
+            save_execution_log(final_state)
+            
+            await update.effective_message.reply_text(
+                "Bạn có muốn tôi sửa đổi hay giúp nghiên cứu thêm gì nữa không? 🔍\n"
+                "Ví dụ: 'Tìm thêm quán cafe', 'Đổi sang đi máy bay'...\n"
+                "Nếu đã hài lòng, hãy nhắn **'Kết thúc'**."
+            )
+            
     except Exception as e:
-        logger.error(f"Error in handle_feedback: {e}")
-        await update.message.reply_text("Có lỗi xảy ra khi xử lý yêu cầu thêm. Vui lòng thử lại.")
-        return FEEDBACK
-
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.message.reply_text("Đã hủy quy trình lên kế hoạch. Hẹn gặp lại!")
-    return ConversationHandler.END
+        logger.error(f"Error in handle_message: {e}")
+        await update.message.reply_text(f"⚠️ Có lỗi xảy ra trong quá trình xử lý: {str(e)}")
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Log the error and send a telegram message to notify the developer."""
     logger.error("Exception while handling an update:", exc_info=context.error)
-    if isinstance(update, Update) and update.effective_message:
-        await update.effective_message.reply_text(
-            "Xin lỗi, có lỗi kết nối với máy chủ Telegram (Timeout). Vui lòng thử lại sau giây lát."
-        )
 
 if __name__ == "__main__":
     token = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -304,46 +176,19 @@ if __name__ == "__main__":
         print("Lỗi: Chưa cấu hình TELEGRAM_BOT_TOKEN trong .env")
         exit(1)
         
-    # Tăng timeout để tránh lỗi TimedOut khi mạng chậm
     application = (
         ApplicationBuilder()
         .token(token)
         .connect_timeout(30)
         .read_timeout(30)
-        .write_timeout(30)
-        .pool_timeout(30)
         .build()
     )
     
-    # Đăng ký bộ xử lý lỗi toàn cục cho ứng dụng
     application.add_error_handler(error_handler)
     
-    # Thiết lập ConversationHandler: Quản lý luồng hội thoại nhiều bước (Kịch bản Bot)
-    conv_handler = ConversationHandler(
-        # Điểm bắt đầu cuộc trò chuyện: Khi người dùng gõ /start
-        entry_points=[CommandHandler('start', start)],
-        
-        # Danh sách các trạng thái (bước) của cuộc hội thoại
-        states={
-            # Bước 1: Thu thập thông tin - Lắng nghe tin nhắn văn bản từ người dùng
-            COLLECTING: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_collection)],
-            
-            # Bước 2: Xác nhận - Xử lý khi người dùng bấm nút (Callback) hoặc nhắn tin để sửa
-            CONFIRMING: [
-                CallbackQueryHandler(confirm_callback, pattern="^confirm_"),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_edit)
-            ],
-            
-            # Bước 3: Phản hồi - Xử lý các yêu cầu nghiên cứu thêm sau khi đã có báo cáo
-            FEEDBACK: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_feedback)],
-        },
-        
-        # Lối thoát: Khi người dùng muốn dừng lại bằng lệnh /cancel
-        fallbacks=[CommandHandler('cancel', cancel)],
-    )
-
-    # Thêm bộ quản lý hội thoại vào ứng dụng Bot
-    application.add_handler(conv_handler)
+    # Chỉ cần 2 Handler duy nhất: Một cho lệnh /start, một cho mọi tin nhắn văn bản
+    application.add_handler(CommandHandler('start', start))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    print("Bot đang chạy...")
+    print("Bot (Thin Wrapper) đang chạy...")
     application.run_polling()

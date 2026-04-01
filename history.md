@@ -1,5 +1,21 @@
 # Project History - AI Travel Planner
 
+## [1.1.1] - 2026-04-01
+
+### Added
+- **Resilient Telegram Delivery:** Triển khai cơ chế fallback tự động. Nếu báo cáo Markdown bị lỗi parser của Telegram, hệ thống sẽ tự động gửi lại dưới dạng Plain Text để đảm bảo người dùng luôn nhận được thông tin.
+- **Seamless Re-planning Flow:** Khi người dùng kết thúc một kế hoạch, hệ thống sẽ tự động xóa state cũ và hiển thị lại lời chào (`welcome_msg`) để sẵn sàng cho kế hoạch mới ngay lập tức.
+
+### Fixed
+- **Extraction Field Consistency:** Đồng bộ hóa key `people_among` giữa `InfoExtractorAgent` và `workflow.py`, khắc phục lỗi không nhận diện được số lượng người đi.
+- **Multi-Intent Routing:** Nâng cấp `IntentAgent` để trả về danh sách ý định (`List[str]`), cho phép xử lý nhiều yêu cầu đồng thời (ví dụ: vừa tìm đồ ăn, vừa xem thời tiết) một cách chính xác.
+- **Redundant Exception Handling:** Loại bỏ code dư thừa trong `src/main.py` để tối ưu hóa hiệu suất và khả năng bảo trì.
+
+### Changed
+- **Improved Intent Analysis:** Cập nhật Prompt cho `IntentAgent` để phân loại ý định rõ ràng hơn và hỗ trợ fallback `other` cho các câu hỏi không rõ ràng.
+
+---
+
 ## [1.1.0] - 2026-03-30
 
 ### Added
